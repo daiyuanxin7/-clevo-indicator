@@ -27,9 +27,10 @@
 sudo apt-get install libayatana-appindicator3-dev libgtk-3-dev
 
 # 编译
-make
+cd clevo-indicator
+make install
 
-# 设置权限
+# 设置权限（可选）
 sudo make test
 
 # 安装（可选）
@@ -38,9 +39,9 @@ sudo make install
 
 ## 使用方法
 
-运行程序：
+运行程序(默认安装到/usr/local/bin/)：
 ```shell
-./bin/clevo-indicator
+/usr/local/bin/clevo-indicator
 ```
 
 命令行使用，使用 `-h` 显示帮助，或输入数字（40%到100%）来控制风扇转速百分比。
