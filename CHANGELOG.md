@@ -1,42 +1,32 @@
-# Changelog
+# 更新日志
 
-## [Unreleased] - 2026-03-12
+## [最新] - 2026-03-12
 
-### Added
-- **GPU fan control**: `ec_write_fan_duty` now simultaneously writes to both
-  CPU fan (EC port `0x01`) and GPU fan (EC port `0x02`), keeping both fans
-  always in sync at the same duty percentage
-- GPU fan RPM registers `EC_REG_FAN2_RPMS_HI` (`0xD2`) and
-  `EC_REG_FAN2_RPMS_LO` (`0xD3`) for reading GPU fan speed
-- `fan2_rpms` field in shared memory for GPU fan RPM tracking
-- `ec_query_fan2_rpms()` function for direct GPU fan RPM query
-- Named constants `EC_CMD_FAN`, `EC_PORT_FAN_CPU`, `EC_PORT_FAN_GPU` to
-  replace magic numbers `0x99`, `0x01`, `0x02`
+### 新增
+- **GPU 风扇控制**：`ec_write_fan_duty` 现在同时写入 CPU 风扇（EC 端口 `0x01`）和 GPU 风扇（EC 端口 `0x02`），两个风扇始终保持相同转速
+- 新增 GPU 风扇转速寄存器 `EC_REG_FAN2_RPMS_HI`（`0xD2`）和 `EC_REG_FAN2_RPMS_LO`（`0xD3`），用于读取 GPU 风扇转速
+- 共享内存中新增 `fan2_rpms` 字段，用于记录 GPU 风扇转速
+- 新增 `ec_query_fan2_rpms()` 函数，支持直接查询 GPU 风扇转速
+- 用命名常量 `EC_CMD_FAN`、`EC_PORT_FAN_CPU`、`EC_PORT_FAN_GPU` 替换原来的魔法数字 `0x99`、`0x01`、`0x02`，提升代码可读性
 
-### Changed
-- `ui_update()` now uses the average RPM of CPU and GPU fans for the tray
-  icon animation, instead of CPU fan only
-- `main_dump_fan()` now displays CPU fan RPM and GPU fan RPM separately
-- Adjusted `MAX_FAN_RPM` from `4400` to `5500` to match actual hardware
-  (verified via EC register dump on target machine)
+### 修改
+- 托盘图标动画改为使用 CPU 和 GPU 风扇转速的平均值，而非仅使用 CPU 风扇转速
+- `main_dump_fan()` 输出信息中分别显示 CPU 和 GPU 风扇转速
+- `MAX_FAN_RPM` 从 `4400` 调整为 `5500`，与实际硬件匹配（通过 EC 寄存器读取验证）
 
-### Fixed
-- **Auto mode silent failure**: `ec_write_fan_duty` had a minimum validation
-  of 60%, but the auto duty algorithm could return 30/40/50%, causing write
-  calls to silently fail and the fan to never decrease speed. Minimum is now
-  30% to match the algorithm's lower bound.
+### 修复
+- **自动模式静默失败**：`ec_write_fan_duty` 原来的最小值校验为 60%，但自动调速算法可能返回 30/40/50%，导致写入调用静默失败、风扇转速无法降低。现已将最小值改为 30%，与算法下限一致
 
 ---
 
-## [Previous] - Ubuntu 22+ compatibility update
+## [上一版本] - Ubuntu 22+ 兼容性更新
 
-- Migrated from `appindicator3` to `ayatana-appindicator3` for Ubuntu 22+
-- Updated build instructions
+- 从 `appindicator3` 迁移至 `ayatana-appindicator3`，支持 Ubuntu 22 及以上版本
+- 更新编译说明文档
 
-## [Initial]
+## [初始版本]
 
-- Original release: system tray indicator for Clevo laptop fan control
-- Auto fan control algorithm based on CPU/GPU temperature
-- Manual fan duty selection (60% ~ 100%) via tray menu
-- Fork/shared-memory architecture: EC worker runs as root, UI runs as
-  desktop user
+- 首次发布：Clevo 笔记本风扇控制系统托盘指示器
+- 基于 CPU/GPU 温度的自动调速算法
+- 支持通过托盘菜单手动设置风扇占空比（60% ~ 100%）
+- 采用 fork + 共享内存架构：EC 工作进程以 root 权限运行，UI 进程以桌面用户权限运行
