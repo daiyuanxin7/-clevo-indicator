@@ -86,8 +86,9 @@
 
 #define MAX_FAN_RPM 5500.0
 
-/* 温度平滑：取最近 N 次读数的平均值，避免瞬时温度抖动触发频繁调速 */
-#define TEMP_SMOOTH_COUNT 10
+/* 降速平滑窗口：取最近 N 次读数的平均值。
+ * 升速使用瞬时温度立即响应，降速使用平均值延迟响应，防止风扇抖动。*/
+#define TEMP_SMOOTH_DOWN_COUNT 30  /* 30 次 × 200ms = 约 6 秒 */
 
 typedef enum {
     NA = 0, AUTO = 1, MANUAL = 2
@@ -106,7 +107,7 @@ static void ui_command_quit(gchar* command);
 static void ui_toggle_menuitems(int fan_duty);
 static void ec_on_sigterm(int signum);
 static int ec_init(void);
-static int ec_auto_duty_adjust(int temp);
+static int ec_auto_duty_adjust(int temp_up, int temp_down);
 static int ec_query_cpu_temp(void);
 static int ec_query_gpu_temp(void);
 static int ec_query_fan_duty(void);
@@ -315,28 +316,31 @@ static int main_ec_worker(void) {
         close(io_fd);
         // auto EC
         if (share_info->auto_duty == 1) {
-            /* 计算 CPU/GPU 温度移动平均，抑制瞬时波动 */
-            static int cpu_history[TEMP_SMOOTH_COUNT];
-            static int gpu_history[TEMP_SMOOTH_COUNT];
+            /* 升速：使用瞬时温度，立即响应温度峰值 */
+            int temp_up = MAX(share_info->cpu_temp, share_info->gpu_temp);
+
+            /* 降速：使用长期平均温度，温度持续回落才降档，防止风扇抖动 */
+            static int cpu_history[TEMP_SMOOTH_DOWN_COUNT];
+            static int gpu_history[TEMP_SMOOTH_DOWN_COUNT];
             static int history_idx = 0;
             static int history_count = 0;
             cpu_history[history_idx] = share_info->cpu_temp;
             gpu_history[history_idx] = share_info->gpu_temp;
-            history_idx = (history_idx + 1) % TEMP_SMOOTH_COUNT;
-            if (history_count < TEMP_SMOOTH_COUNT) history_count++;
+            history_idx = (history_idx + 1) % TEMP_SMOOTH_DOWN_COUNT;
+            if (history_count < TEMP_SMOOTH_DOWN_COUNT) history_count++;
             int cpu_sum = 0, gpu_sum = 0;
             for (int i = 0; i < history_count; i++) {
                 cpu_sum += cpu_history[i];
                 gpu_sum += gpu_history[i];
             }
-            int smoothed_temp = MAX(cpu_sum / history_count, gpu_sum / history_count);
+            int temp_down = MAX(cpu_sum / history_count, gpu_sum / history_count);
 
-            int next_duty = ec_auto_duty_adjust(smoothed_temp);
+            int next_duty = ec_auto_duty_adjust(temp_up, temp_down);
             if (next_duty != 0 && next_duty != share_info->auto_duty_val) {
                 char s_time[256];
                 get_time_string(s_time, 256, "%m/%d %H:%M:%S");
-                printf("%s CPU=%d°C, GPU=%d°C, smoothed=%d°C, auto fan duty to %d%%\n", s_time,
-                        share_info->cpu_temp, share_info->gpu_temp, smoothed_temp, next_duty);
+                printf("%s CPU=%d°C, GPU=%d°C, avg=%d°C, auto fan duty to %d%%\n", s_time,
+                        share_info->cpu_temp, share_info->gpu_temp, temp_down, next_duty);
                 ec_write_fan_duty(next_duty);
                 share_info->auto_duty_val = next_duty;
             }
@@ -478,29 +482,29 @@ static void ec_on_sigterm(int signum) {
         share_info->exit = 1;
 }
 
-/* 根据平滑温度调整风扇占空比。
- * 升速和降速阈值之间保持 10°C 滞后区间，防止温度在边界附近
- * 小幅波动时反复切档导致风扇抖动。
+/* 非对称滞后调速：
+ *   升速 —— 用瞬时温度 temp_up，快速响应，保护硬件
+ *   降速 —— 用长期平均温度 temp_down（约 6 秒窗口），延迟响应，防止抖动
  */
-static int ec_auto_duty_adjust(int temp) {
+static int ec_auto_duty_adjust(int temp_up, int temp_down) {
     int duty = share_info->fan_duty;
-    /* 升速：温度超过阈值时提高占空比 */
-    if (temp >= 80 && duty < 100) return 100;
-    if (temp >= 70 && duty < 90)  return 90;
-    if (temp >= 60 && duty < 80)  return 80;
-    if (temp >= 50 && duty < 70)  return 70;
-    if (temp >= 40 && duty < 60)  return 60;
-    if (temp >= 30 && duty < 50)  return 50;
-    if (temp >= 20 && duty < 40)  return 40;
-    if (temp >= 10 && duty < 30)  return 30;
-    /* 降速：比对应升速阈值低 10°C 才降档（滞后区间 10°C）*/
-    if (temp <= 10 && duty > 30)  return 30;
-    if (temp <= 20 && duty > 40)  return 40;
-    if (temp <= 30 && duty > 50)  return 50;
-    if (temp <= 40 && duty > 60)  return 60;
-    if (temp <= 50 && duty > 70)  return 70;
-    if (temp <= 60 && duty > 80)  return 80;
-    if (temp <= 70 && duty > 90)  return 90;
+    /* 升速：瞬时温度超过阈值立即提高占空比 */
+    if (temp_up >= 80 && duty < 100) return 100;
+    if (temp_up >= 70 && duty < 90)  return 90;
+    if (temp_up >= 60 && duty < 80)  return 80;
+    if (temp_up >= 50 && duty < 70)  return 70;
+    if (temp_up >= 40 && duty < 60)  return 60;
+    if (temp_up >= 30 && duty < 50)  return 50;
+    if (temp_up >= 20 && duty < 40)  return 40;
+    if (temp_up >= 10 && duty < 30)  return 30;
+    /* 降速：平均温度持续低于阈值才降档（滞后区间 10°C）*/
+    if (temp_down <= 10 && duty > 30)  return 30;
+    if (temp_down <= 20 && duty > 40)  return 40;
+    if (temp_down <= 30 && duty > 50)  return 50;
+    if (temp_down <= 40 && duty > 60)  return 60;
+    if (temp_down <= 50 && duty > 70)  return 70;
+    if (temp_down <= 60 && duty > 80)  return 80;
+    if (temp_down <= 70 && duty > 90)  return 90;
     return 0;
 }
 
